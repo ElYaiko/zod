@@ -23,6 +23,7 @@ import {
 import { partialUtil } from "./helpers/partialUtil.ts";
 import { Primitive } from "./helpers/typeAliases.ts";
 import { getParsedType, util, ZodParsedType } from "./helpers/util.ts";
+import type { StandardSchemaV1 } from "./standard-schema.js";
 import {
   IssueData,
   StringValidation,
@@ -152,6 +153,8 @@ export abstract class ZodType<
   readonly _def!: Def;
 
   isImportant = false;
+
+  "~standard": StandardSchemaV1.Props<Input, Output>;
 
   get label() {
     return this._def.label;
@@ -402,6 +405,68 @@ export abstract class ZodType<
     this.pipe = this.pipe.bind(this);
     this.isNullable = this.isNullable.bind(this);
     this.isOptional = this.isOptional.bind(this);
+
+    this["~standard"] = {
+      version: 1,
+      vendor: "zod",
+      validate: (
+        value: unknown
+      ):
+        | StandardSchemaV1.Result<Output>
+        | Promise<StandardSchemaV1.Result<Output>> => {
+        const ctx: ParseContext = {
+          common: { issues: [], async: false, fatalOnError: false },
+          path: [],
+          label: this.label,
+          schemaErrorMap: this._def.errorMap,
+          parent: null,
+          data: value,
+          parsedType: getParsedType(value),
+        };
+        try {
+          const result = this._parseSync({
+            data: value,
+            path: [],
+            parent: ctx,
+            label: ctx.label,
+          });
+          if (isValid(result)) {
+            return { value: result.value };
+          } else {
+            return {
+              issues: ctx.common.issues.map((issue) => ({
+                message: issue.message,
+                path: issue.path,
+              })),
+            };
+          }
+        } catch (err: any) {
+          if (err.message.includes("during synchronous")) {
+            const asyncCommon = { ...ctx.common, async: true, issues: [] };
+            const asyncCtx = { ...ctx, common: asyncCommon };
+            return this._parseAsync({
+              data: value,
+              path: [],
+              parent: asyncCtx,
+              label: asyncCtx.label,
+            }).then((result) => {
+              if (isValid(result)) {
+                return { value: result.value };
+              } else {
+                return {
+                  issues: asyncCtx.common.issues.map((issue: any) => ({
+                    message: issue.message,
+                    path: issue.path,
+                  })),
+                };
+              }
+            });
+          }
+          throw err;
+        }
+      },
+      types: { input: this._input, output: this._output },
+    } as const;
   }
 
   optional(): ZodOptional<this> {
